@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
++#include <stdlib.h>
 
 static void test_alarm_component(void) {
     printf("Testing alarm component...\n");
