@@ -1,3 +1,7 @@
+// src/dop_adapter.c
+// OBINexus DOP Adapter Implementation
+// Provides Function <-> OOP conversion capabilities
+
 #include "dop_adapter.h"
 #include <stdlib.h>
 #include <string.h>
@@ -9,71 +13,78 @@ typedef struct {
     dop_func_update_t update_func;
     dop_func_destroy_t destroy_func;
     dop_func_serialize_t serialize_func;
-} dop_oop_impl_t;
+} dop_oop_instance_t;
 
 // OOP Interface Methods
-static int oop_create(void* self, dop_component_type_t type) {
-    dop_oop_impl_t* impl = (dop_oop_impl_t*)self;
-    if (impl->create_func) {
-        impl->component = impl->create_func(type);
-        return impl->component ? DOP_SUCCESS : DOP_ERROR_MEMORY_ALLOCATION;
+static int oop_create(void* instance, dop_component_type_t type) {
+    dop_oop_instance_t* oop_inst = (dop_oop_instance_t*)instance;
+    if (!oop_inst || !oop_inst->create_func) return DOP_ERROR_INVALID_PARAMETER;
+    
+    oop_inst->component = oop_inst->create_func(type);
+    return oop_inst->component ? DOP_SUCCESS : DOP_ERROR_MEMORY_ALLOCATION;
+}
+
+static int oop_update(void* instance) {
+    dop_oop_instance_t* oop_inst = (dop_oop_instance_t*)instance;
+    if (!oop_inst || !oop_inst->update_func || !oop_inst->component) {
+        return DOP_ERROR_INVALID_PARAMETER;
     }
-    return DOP_ERROR_INVALID_PARAMETER;
+    
+    return oop_inst->update_func(oop_inst->component);
 }
 
-static int oop_update(void* self) {
-    dop_oop_impl_t* impl = (dop_oop_impl_t*)self;
-    if (impl->update_func && impl->component) {
-        return impl->update_func(impl->component);
+static int oop_destroy(void* instance) {
+    dop_oop_instance_t* oop_inst = (dop_oop_instance_t*)instance;
+    if (!oop_inst || !oop_inst->destroy_func || !oop_inst->component) {
+        return DOP_ERROR_INVALID_PARAMETER;
     }
-    return DOP_ERROR_INVALID_PARAMETER;
+    
+    return oop_inst->destroy_func(oop_inst->component);
 }
 
-static int oop_destroy(void* self) {
-    dop_oop_impl_t* impl = (dop_oop_impl_t*)self;
-    if (impl->destroy_func && impl->component) {
-        return impl->destroy_func(impl->component);
+static char* oop_serialize(void* instance) {
+    dop_oop_instance_t* oop_inst = (dop_oop_instance_t*)instance;
+    if (!oop_inst || !oop_inst->serialize_func || !oop_inst->component) {
+        return NULL;
     }
-    return DOP_ERROR_INVALID_PARAMETER;
+    
+    return oop_inst->serialize_func(oop_inst->component);
 }
 
-static char* oop_serialize(void* self) {
-    dop_oop_impl_t* impl = (dop_oop_impl_t*)self;
-    if (impl->serialize_func && impl->component) {
-        return impl->serialize_func(impl->component);
-    }
-    return NULL;
+static dop_component_t* oop_get_data(void* instance) {
+    dop_oop_instance_t* oop_inst = (dop_oop_instance_t*)instance;
+    return oop_inst ? oop_inst->component : NULL;
 }
 
-static dop_component_t* oop_get_data(void* self) {
-    dop_oop_impl_t* impl = (dop_oop_impl_t*)self;
-    return impl->component;
-}
-
-// Adapter Function Implementations
+// Function to OOP Conversion Implementation
 dop_oop_interface_t* dop_adapter_func_to_oop(dop_func_create_t create_func,
                                               dop_func_update_t update_func,
                                               dop_func_destroy_t destroy_func,
                                               dop_func_serialize_t serialize_func) {
-    if (!create_func || !update_func) {
+    if (!create_func || !update_func || !destroy_func || !serialize_func) {
         return NULL;
     }
     
-    dop_oop_interface_t* interface = calloc(1, sizeof(dop_oop_interface_t));
+    // Allocate OOP interface structure
+    dop_oop_interface_t* interface = malloc(sizeof(dop_oop_interface_t));
     if (!interface) return NULL;
     
-    dop_oop_impl_t* impl = calloc(1, sizeof(dop_oop_impl_t));
-    if (!impl) {
+    // Allocate instance data
+    dop_oop_instance_t* instance = malloc(sizeof(dop_oop_instance_t));
+    if (!instance) {
         free(interface);
         return NULL;
     }
     
-    impl->create_func = create_func;
-    impl->update_func = update_func;
-    impl->destroy_func = destroy_func;
-    impl->serialize_func = serialize_func;
+    // Initialize instance with function pointers
+    instance->component = NULL;
+    instance->create_func = create_func;
+    instance->update_func = update_func;
+    instance->destroy_func = destroy_func;
+    instance->serialize_func = serialize_func;
     
-    interface->instance = impl;
+    // Setup interface methods
+    interface->instance = instance;
     interface->create = oop_create;
     interface->update = oop_update;
     interface->destroy = oop_destroy;
@@ -83,22 +94,12 @@ dop_oop_interface_t* dop_adapter_func_to_oop(dop_func_create_t create_func,
     return interface;
 }
 
-// Wrapper functions for OOP to Functional conversion
-static dop_component_t* create_wrapper(dop_component_type_t type) {
-    // This would need to be implemented based on specific OOP interface
-    return dop_func_create_component(type);
-}
-
-static int update_wrapper(dop_component_t* component) {
-    return dop_func_update_component(component);
-}
-
 dop_func_create_t dop_adapter_oop_to_func_create(dop_oop_interface_t* oop_interface) {
-    if (!oop_interface) return NULL;
-    return create_wrapper;
+    (void)oop_interface;
+    return dop_func_create_component;
 }
 
 dop_func_update_t dop_adapter_oop_to_func_update(dop_oop_interface_t* oop_interface) {
-    if (!oop_interface) return NULL;
-    return update_wrapper;
+    (void)oop_interface;
+    return dop_func_update_component;
 }
