@@ -1,0 +1,57 @@
+.
+├── build
+│   ├── CMakeCache.txt
+│   └── CMakeFiles
+│       ├── 3.25.1
+│       │   ├── CMakeCCompiler.cmake
+│       │   ├── CMakeDetermineCompilerABI_C.bin
+│       │   ├── CMakeSystem.cmake
+│       │   └── CompilerIdC
+│       │       ├── a.out
+│       │       ├── CMakeCCompilerId.c
+│       │       └── tmp
+│       ├── cmake.check_cache
+│       ├── CMakeOutput.log
+│       └── pkgRedirects
+├── CMakeLists.txt
+├── docs
+│   ├── dist
+│   │   ├── Enhanced Chapter 6_ Git-RAF Integration.pdf
+│   │   ├── Enhanced Chapter 6_ Git-RAF Integration.pdf:Zone.Identifier
+│   │   └── OBINexus Zero Trust Topology UML Architecture.pdf
+│   └── obinexus_zero_trust_topology.md
+├── examples
+│   └── time_components_manifest.xml
+├── gov-refactor.sh
+├── gov-refactor.sh.ol
+├── gov-std.txt
+├── include
+│   ├── dop_adapter.h
+│   ├── dop_manifest.h
+│   ├── dop_topology.h
+│   └── obinexus_dop_core.h
+├── (isolated)
+│   └── obinexus_dop_c_implementation.c
+├── keys
+├── Makefile
+├── obinexus_cmake_build_system.md
+├── refactor_corrected.sh
+├── refactor.sh
+├── schemas
+│   └── dop_manifest.xsd
+├── src
+│   ├── components
+│   │   ├── alarm.c
+│   │   ├── clock.c
+│   │   ├── stopwatch.c
+│   │   └── timer.c
+│   ├── demo
+│   │   └── dop_demo.c
+│   ├── dop_adapter.c
+│   ├── dop_manifest.c
+│   ├── dop_topology.c
+│   └── obinexus_dop_core.c
+└── tests
+    └── test_components.c
+
+18 directories, 37 files
