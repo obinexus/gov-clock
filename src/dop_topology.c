@@ -1,11 +1,13 @@
-//===========================================
 // src/dop_topology.c
 // OBINexus DOP Topology Management Implementation
-// Provides P2P network and fault tolerance capabilities
+// Corrected to match header structure definitions
 
 #include "dop_topology.h"
 #include <stdlib.h>
 #include <string.h>
+
+// Define constants based on header structure definitions
+#define DOP_MAX_PEERS 4    // Based on peers[4] array in header
 
 dop_topology_node_t* dop_topology_create_node(const char* node_id, dop_component_t* component) {
     if (!node_id || !component) return NULL;
@@ -17,7 +19,11 @@ dop_topology_node_t* dop_topology_create_node(const char* node_id, dop_component
     node->component = component;
     node->peer_count = 0;
     node->is_fault_tolerant = true;
-    node->load_balancing_weight = 1.0;
+    
+    // Initialize peers array to NULL
+    for (int i = 0; i < DOP_MAX_PEERS; i++) {
+        node->peers[i] = NULL;
+    }
     
     return node;
 }
