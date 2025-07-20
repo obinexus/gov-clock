@@ -1,5 +1,5 @@
 # OBINexus Gov-Clock Makefile with XML File Loading
-# Fixed dependency structure for proper build execution
+# Loads existing test_manifest.xml and integrates with build verification
 
 # Compiler Configuration
 CC = gcc
@@ -54,11 +54,11 @@ all: debug xml_build_verification
 
 # Debug Build
 debug: CFLAGS := $(DEBUG_CFLAGS)
-debug: directories $(STATIC_LIB) $(DEMO_EXECUTABLE) $(BUILD_MANIFEST)
+debug: directories $(STATIC_LIB) $(DEMO_EXECUTABLE) load_and_update_manifest
 
 # Release Build
 release: CFLAGS := $(RELEASE_CFLAGS)
-release: directories $(STATIC_LIB) $(DEMO_EXECUTABLE) $(BUILD_MANIFEST)
+release: directories $(STATIC_LIB) $(DEMO_EXECUTABLE) load_and_update_manifest
 
 # Create Build Directories
 directories:
@@ -107,36 +107,40 @@ $(BUILD_DIR)/%.o: %.c | directories
 	$(CC) $(CFLAGS) -c $< -o $@
 	@echo "$(shell date -Iseconds): $< -> $@" >> $(SOURCE_TRACEABILITY)
 
-# Create Updated Manifest with Build Information
-$(UPDATED_MANIFEST): $(PROJECT_MANIFEST) $(STATIC_LIB) $(DEMO_EXECUTABLE)
-	@echo "Creating updated manifest with build information..."
+# Load and Update Manifest with Build Information
+load_and_update_manifest: $(STATIC_LIB) $(DEMO_EXECUTABLE) $(PROJECT_MANIFEST)
+	@echo "Updating manifest with build information..."
 	@cp $(PROJECT_MANIFEST) $(UPDATED_MANIFEST)
 	@sed -i 's/<dop:build_timestamp>.*<\/dop:build_timestamp>/<dop:build_timestamp>$(shell date -Iseconds)<\/dop:build_timestamp>/' $(UPDATED_MANIFEST)
 	@sed -i 's/<dop:target_name>.*<\/dop:target_name>/<dop:target_name>obinexus_gov_clock_build<\/dop:target_name>/' $(UPDATED_MANIFEST)
 	@echo "✓ Manifest updated with current build information"
+	@$(MAKE) generate_build_artifacts_section
 
-# Create Build Manifest with Artifacts and Source Files
-$(BUILD_MANIFEST): $(UPDATED_MANIFEST)
-	@echo "Creating complete build manifest with artifacts and source files..."
+# Generate Build Artifacts Section
+generate_build_artifacts_section: $(UPDATED_MANIFEST)
+	@echo "Adding build artifacts to manifest..."
 	@cp $(UPDATED_MANIFEST) $(BUILD_MANIFEST)
-	@echo "Adding source files section..."
-	@sed -i '/<dop:build_topology>/i\  <dop:source_files>' $(BUILD_MANIFEST)
-	@for src in $(CORE_SOURCES) $(DEMO_SOURCES); do \
-		checksum=$$(sha256sum $$src | cut -d' ' -f1); \
-		sed -i "/<dop:build_topology>/i\\    <dop:source_file>\\n      <dop:file_path>$$src</dop:file_path>\\n      <dop:checksum_sha256>$$checksum</dop:checksum_sha256>\\n    </dop:source_file>" $(BUILD_MANIFEST); \
-	done
-	@sed -i '/<dop:build_topology>/i\  </dop:source_files>' $(BUILD_MANIFEST)
-	@echo "Adding build artifacts section..."
 	@sed -i '/<\/dop:cryptographic_verification>/i\  <dop:build_artifacts>' $(BUILD_MANIFEST)
 	@lib_checksum=$$(sha256sum $(STATIC_LIB) | cut -d' ' -f1); \
 	sed -i "/<\/dop:cryptographic_verification>/i\\    <dop:artifact>\\n      <dop:artifact_name>libobinexus_dop_isolated.a</dop:artifact_name>\\n      <dop:artifact_type>STATIC_LIBRARY</dop:artifact_type>\\n      <dop:checksum_sha256>$$lib_checksum</dop:checksum_sha256>\\n    </dop:artifact>" $(BUILD_MANIFEST)
 	@demo_checksum=$$(sha256sum $(DEMO_EXECUTABLE) | cut -d' ' -f1); \
 	sed -i "/<\/dop:cryptographic_verification>/i\\    <dop:artifact>\\n      <dop:artifact_name>dop_demo</dop:artifact_name>\\n      <dop:artifact_type>EXECUTABLE</dop:artifact_type>\\n      <dop:checksum_sha256>$$demo_checksum</dop:checksum_sha256>\\n    </dop:artifact>" $(BUILD_MANIFEST)
 	@sed -i '/<\/dop:cryptographic_verification>/i\  </dop:build_artifacts>' $(BUILD_MANIFEST)
-	@echo "✓ Complete build manifest created: $(BUILD_MANIFEST)"
+	@echo "✓ Build artifacts section added to manifest"
+
+# Add Source Files Section
+add_source_files_section: generate_build_artifacts_section
+	@echo "Adding source files section to manifest..."
+	@sed -i '/<dop:build_topology>/i\  <dop:source_files>' $(BUILD_MANIFEST)
+	@for src in $(CORE_SOURCES) $(DEMO_SOURCES); do \
+		checksum=$$(sha256sum $$src | cut -d' ' -f1); \
+		sed -i "/<dop:build_topology>/i\\    <dop:source_file>\\n      <dop:file_path>$$src</dop:file_path>\\n      <dop:checksum_sha256>$$checksum</dop:checksum_sha256>\\n    </dop:source_file>" $(BUILD_MANIFEST); \
+	done
+	@sed -i '/<dop:build_topology>/i\  </dop:source_files>' $(BUILD_MANIFEST)
+	@echo "✓ Source files section added to manifest"
 
 # XML Build Verification System
-xml_build_verification: $(BUILD_MANIFEST)
+xml_build_verification: add_source_files_section
 	@echo "=== XML Build Verification System ==="
 	@echo "Verifying XML manifest structure..."
 	@if command -v xmllint >/dev/null 2>&1; then \
@@ -275,5 +279,6 @@ help:
 
 # Phony Target Declarations
 .PHONY: all debug release directories verify_source_manifest xml_build_verification
+.PHONY: load_and_update_manifest generate_build_artifacts_section add_source_files_section
 .PHONY: test demo test_xml validate_loaded_manifest generate_traceability_report
 .PHONY: clean summary help
