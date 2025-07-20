@@ -6,7 +6,8 @@
 #include <sys/time.h>
 
 // Data-Oriented Implementation: Pure Functions Operating on Data
-// Time Utility Functions (add to obinexus_dop_core.c)
+// Time Utility Functions
+
 dop_time_data_t dop_time_add_duration(dop_time_data_t base, uint64_t duration_ms) {
     dop_time_data_t result = base;
     result.timestamp_ms += duration_ms;
