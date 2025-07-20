@@ -1,4 +1,5 @@
 #include "obinexus_dop_core.h"
+#include <string.h>
 
 int dop_stopwatch_start(dop_component_t* component) {
     if (!component || component->metadata.type != DOP_COMPONENT_STOPWATCH) {
