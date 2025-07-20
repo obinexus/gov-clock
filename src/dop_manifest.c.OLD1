@@ -1,6 +1,7 @@
+//===========================================
 // src/dop_manifest.c
 // OBINexus DOP XML Manifest Implementation
-// Corrected to match actual structure definitions
+// Provides XML serialization and validation capabilities
 
 #include "dop_manifest.h"
 #include <stdlib.h>
@@ -50,21 +51,8 @@ int dop_manifest_save_to_xml(const dop_build_topology_t* topology, const char* x
             }
             fprintf(file, "        <dop:is_fault_tolerant>%s</dop:is_fault_tolerant>\n",
                     node->is_fault_tolerant ? "true" : "false");
-            // Use default load balancing weight since structure field doesn't exist
-            fprintf(file, "        <dop:load_balancing_weight>1.0</dop:load_balancing_weight>\n");
-            
-            // Write peer connections if any exist
-            if (node->peer_count > 0) {
-                fprintf(file, "        <dop:peer_connections>\n");
-                for (uint32_t j = 0; j < node->peer_count && j < 4; j++) {
-                    if (node->peers[j]) {
-                        fprintf(file, "          <dop:peer>%s</dop:peer>\n", 
-                                node->peers[j]->node_id);
-                    }
-                }
-                fprintf(file, "        </dop:peer_connections>\n");
-            }
-            
+            fprintf(file, "        <dop:load_balancing_weight>%.2f</dop:load_balancing_weight>\n",
+                    node->load_balancing_weight);
             fprintf(file, "      </dop:node>\n");
         }
     }
@@ -77,26 +65,7 @@ int dop_manifest_save_to_xml(const dop_build_topology_t* topology, const char* x
     fprintf(file, "    <dop:immutability_verified>true</dop:immutability_verified>\n");
     fprintf(file, "    <dop:data_logic_separation_verified>true</dop:data_logic_separation_verified>\n");
     fprintf(file, "    <dop:transparency_verified>true</dop:transparency_verified>\n");
-    fprintf(file, "    <dop:isolation_boundaries>\n");
-    fprintf(file, "      <dop:memory_isolation>true</dop:memory_isolation>\n");
-    fprintf(file, "      <dop:process_isolation>true</dop:process_isolation>\n");
-    fprintf(file, "      <dop:network_isolation>false</dop:network_isolation>\n");
-    fprintf(file, "      <dop:file_system_isolation>false</dop:file_system_isolation>\n");
-    fprintf(file, "    </dop:isolation_boundaries>\n");
     fprintf(file, "  </dop:component_validation>\n\n");
-    
-    // Write cryptographic verification section
-    fprintf(file, "  <dop:cryptographic_verification>\n");
-    fprintf(file, "    <dop:integrity_algorithm>SHA256</dop:integrity_algorithm>\n");
-    fprintf(file, "    <dop:signature_algorithm>RSA_PSS</dop:signature_algorithm>\n");
-    fprintf(file, "    <dop:verification_chain>\n");
-    fprintf(file, "      <dop:verification_step>\n");
-    fprintf(file, "        <dop:step_name>topology_integrity</dop:step_name>\n");
-    fprintf(file, "        <dop:verification_method>node_validation</dop:verification_method>\n");
-    fprintf(file, "        <dop:expected_result>pass</dop:expected_result>\n");
-    fprintf(file, "      </dop:verification_step>\n");
-    fprintf(file, "    </dop:verification_chain>\n");
-    fprintf(file, "  </dop:cryptographic_verification>\n\n");
     
     fprintf(file, "</dop:dop_manifest>\n");
     
@@ -176,10 +145,8 @@ int dop_manifest_validate_schema(const char* xml_path) {
     fclose(file);
     
     if (has_xml_declaration && has_dop_namespace && has_manifest_metadata && has_build_topology) {
-        printf("Manifest schema validation passed for: %s\n", xml_path);
         return DOP_SUCCESS;
     }
     
-    printf("Manifest schema validation failed for: %s\n", xml_path);
     return DOP_ERROR_XML_PARSING;
 }
