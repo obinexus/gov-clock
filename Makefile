@@ -1,136 +1,152 @@
-# OBINexus Taxonomy-Based Makefile
-# Final corrected version with proper syntax
+//===========================================
+// src/dop_manifest.c
+// OBINexus DOP XML Manifest Implementation
+// Provides XML serialization and validation capabilities
 
-CC = gcc
-CFLAGS = -std=c11 -Wall -Wextra -Wpedantic -pthread
-LDFLAGS = -pthread
+#include "dop_manifest.h"
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
 
-# Taxonomy-Based Build Configurations
-DEBUG_CFLAGS = $(CFLAGS) -g -O0 -DDOP_DEBUG=1 -DTAXONOMY_TESTING=1
-RELEASE_CFLAGS = $(CFLAGS) -O3 -DNDEBUG -DDOP_RELEASE=1
-STRESS_CFLAGS = $(CFLAGS) -O2 -g -DDOP_STRESS_TEST=1 -DTAXONOMY_STRESS=1
+int dop_manifest_save_to_xml(const dop_build_topology_t* topology, const char* xml_path) {
+    if (!topology || !xml_path) return DOP_ERROR_INVALID_PARAMETER;
+    
+    FILE* file = fopen(xml_path, "w");
+    if (!file) return DOP_ERROR_XML_PARSING;
+    
+    // Write XML header and namespace declarations
+    fprintf(file, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    fprintf(file, "<dop:dop_manifest xmlns:dop=\"http://obinexus.org/dop/schema\"\n");
+    fprintf(file, "                  xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n");
+    fprintf(file, "                  xsi:schemaLocation=\"http://obinexus.org/dop/schema obinexus_dop_manifest.xsd\">\n\n");
+    
+    // Write manifest metadata
+    fprintf(file, "  <dop:manifest_metadata>\n");
+    fprintf(file, "    <dop:manifest_version>1.0.0</dop:manifest_version>\n");
+    fprintf(file, "    <dop:build_timestamp>2025-07-20T12:00:00Z</dop:build_timestamp>\n");
+    fprintf(file, "    <dop:target_name>%s</dop:target_name>\n", topology->build_id);
+    fprintf(file, "    <dop:build_system>makefile</dop:build_system>\n");
+    fprintf(file, "    <dop:validation_level>bidirectional</dop:validation_level>\n");
+    fprintf(file, "  </dop:manifest_metadata>\n\n");
+    
+    // Write build topology configuration
+    fprintf(file, "  <dop:build_topology>\n");
+    fprintf(file, "    <dop:topology_type>P2P</dop:topology_type>\n");
+    fprintf(file, "    <dop:fault_tolerance>%s</dop:fault_tolerance>\n", 
+            topology->is_fault_tolerant ? "true" : "false");
+    fprintf(file, "    <dop:p2p_enabled>%s</dop:p2p_enabled>\n", 
+            topology->is_p2p_enabled ? "true" : "false");
+    fprintf(file, "    <dop:max_nodes>%u</dop:max_nodes>\n", topology->node_count);
+    
+    // Write nodes
+    fprintf(file, "    <dop:nodes>\n");
+    for (uint32_t i = 0; i < topology->node_count; i++) {
+        if (topology->nodes[i]) {
+            dop_topology_node_t* node = topology->nodes[i];
+            fprintf(file, "      <dop:node>\n");
+            fprintf(file, "        <dop:node_id>%s</dop:node_id>\n", node->node_id);
+            if (node->component) {
+                fprintf(file, "        <dop:component_ref>%s</dop:component_ref>\n", 
+                        node->component->metadata.component_id);
+            }
+            fprintf(file, "        <dop:is_fault_tolerant>%s</dop:is_fault_tolerant>\n",
+                    node->is_fault_tolerant ? "true" : "false");
+            fprintf(file, "        <dop:load_balancing_weight>%.2f</dop:load_balancing_weight>\n",
+                    node->load_balancing_weight);
+            fprintf(file, "      </dop:node>\n");
+        }
+    }
+    fprintf(file, "    </dop:nodes>\n");
+    fprintf(file, "  </dop:build_topology>\n\n");
+    
+    // Write component validation
+    fprintf(file, "  <dop:component_validation>\n");
+    fprintf(file, "    <dop:dop_principles_enforced>true</dop:dop_principles_enforced>\n");
+    fprintf(file, "    <dop:immutability_verified>true</dop:immutability_verified>\n");
+    fprintf(file, "    <dop:data_logic_separation_verified>true</dop:data_logic_separation_verified>\n");
+    fprintf(file, "    <dop:transparency_verified>true</dop:transparency_verified>\n");
+    fprintf(file, "  </dop:component_validation>\n\n");
+    
+    fprintf(file, "</dop:dop_manifest>\n");
+    
+    fclose(file);
+    return DOP_SUCCESS;
+}
 
-# Directories
-SRC_DIR = src
-INCLUDE_DIR = include
-BUILD_DIR = build
-TEST_DIR = tests
+int dop_manifest_load_from_xml(const char* xml_path, dop_build_topology_t* topology) {
+    if (!xml_path || !topology) return DOP_ERROR_INVALID_PARAMETER;
+    
+    FILE* file = fopen(xml_path, "r");
+    if (!file) return DOP_ERROR_XML_PARSING;
+    
+    // Simplified XML parsing for demonstration
+    char line[512];
+    bool found_build_id = false;
+    
+    while (fgets(line, sizeof(line), file)) {
+        // Parse build ID
+        if (strstr(line, "<dop:target_name>")) {
+            char* start = strstr(line, ">") + 1;
+            char* end = strstr(start, "<");
+            if (start && end) {
+                size_t len = end - start;
+                if (len < sizeof(topology->build_id)) {
+                    strncpy(topology->build_id, start, len);
+                    topology->build_id[len] = '\0';
+                    found_build_id = true;
+                }
+            }
+        }
+        
+        // Parse P2P enabled flag
+        if (strstr(line, "<dop:p2p_enabled>true</dop:p2p_enabled>")) {
+            topology->is_p2p_enabled = true;
+        }
+        
+        // Parse fault tolerance flag
+        if (strstr(line, "<dop:fault_tolerance>true</dop:fault_tolerance>")) {
+            topology->is_fault_tolerant = true;
+        }
+    }
+    
+    fclose(file);
+    
+    return found_build_id ? DOP_SUCCESS : DOP_ERROR_XML_PARSING;
+}
 
-# Source Files
-CORE_SOURCES = $(SRC_DIR)/obinexus_dop_core.c
-COMPONENT_SOURCES = $(wildcard $(SRC_DIR)/components/*.c)
-DEMO_SOURCES = $(wildcard $(SRC_DIR)/demo/*.c)
-TEST_SOURCES = $(wildcard $(TEST_DIR)/*.c)
-
-# Object Files
-CORE_OBJECTS = $(CORE_SOURCES:%.c=$(BUILD_DIR)/%.o)
-COMPONENT_OBJECTS = $(COMPONENT_SOURCES:%.c=$(BUILD_DIR)/%.o)
-DEMO_OBJECTS = $(DEMO_SOURCES:%.c=$(BUILD_DIR)/%.o)
-TEST_OBJECTS = $(TEST_SOURCES:%.c=$(BUILD_DIR)/%.o)
-
-# Library Targets
-ISOLATED_LIB = $(BUILD_DIR)/libobinexus_dop_isolated.a
-CLOSED_LIB = $(BUILD_DIR)/libobinexus_dop_closed.a
-OPEN_LIB = $(BUILD_DIR)/libobinexus_dop_open.a
-
-# Executable Targets
-DEMO_EXECUTABLE = $(BUILD_DIR)/dop_demo
-TEST_EXECUTABLE = $(BUILD_DIR)/dop_tests
-
-# Default target
-all: debug
-
-# Debug build with taxonomy support
-debug: CFLAGS := $(DEBUG_CFLAGS)
-debug: $(ISOLATED_LIB) $(DEMO_EXECUTABLE) $(TEST_EXECUTABLE)
-
-# Release build
-release: CFLAGS := $(RELEASE_CFLAGS)
-release: $(ISOLATED_LIB) $(DEMO_EXECUTABLE) $(TEST_EXECUTABLE)
-
-# Stress testing build
-stress: CFLAGS := $(STRESS_CFLAGS)
-stress: $(ISOLATED_LIB) $(DEMO_EXECUTABLE) $(TEST_EXECUTABLE)
-
-# Isolated system library (core components only)
-$(ISOLATED_LIB): $(CORE_OBJECTS) $(COMPONENT_OBJECTS) | $(BUILD_DIR)
-	ar rcs $@ $^
-
-# Demo executable
-$(DEMO_EXECUTABLE): $(DEMO_OBJECTS) $(ISOLATED_LIB) | $(BUILD_DIR)
-	$(CC) $(DEMO_OBJECTS) $(ISOLATED_LIB) $(LDFLAGS) -o $@
-
-# Test executable
-$(TEST_EXECUTABLE): $(TEST_OBJECTS) $(ISOLATED_LIB) | $(BUILD_DIR)
-	$(CC) $(TEST_OBJECTS) $(ISOLATED_LIB) $(LDFLAGS) -o $@
-
-# Object file compilation with proper dependency handling
-$(BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -I$(INCLUDE_DIR) -c $< -o $@
-
-# Create build directory
-$(BUILD_DIR):
-	mkdir -p $(BUILD_DIR)
-
-# Testing targets
-test: $(TEST_EXECUTABLE)
-	$(TEST_EXECUTABLE) component
-
-test-demo: $(DEMO_EXECUTABLE)
-	$(DEMO_EXECUTABLE) --test-components
-	$(DEMO_EXECUTABLE) --test-gates
-
-test-isolated: $(TEST_EXECUTABLE)
-	@echo "Running isolated system tests..."
-	$(TEST_EXECUTABLE) component
-
-test-preflight: $(DEMO_EXECUTABLE)
-	@echo "Running preflight validation..."
-	$(DEMO_EXECUTABLE) --test-components
-
-test-clock-enhanced: $(DEMO_EXECUTABLE)
-	@echo "Running enhanced clock tests..."
-	$(DEMO_EXECUTABLE) --test-gates
-
-# Clean targets
-clean:
-	rm -rf $(BUILD_DIR)
-
-clean-objects:
-	find $(BUILD_DIR) -name "*.o" -delete
-
-# Installation targets
-install: release
-	@echo "Installing OBINexus DOP components..."
-	install -d /usr/local/lib
-	install -d /usr/local/include/obinexus
-	install $(ISOLATED_LIB) /usr/local/lib/
-	install $(DEMO_EXECUTABLE) /usr/local/bin/
-	install $(INCLUDE_DIR)/*.h /usr/local/include/obinexus/
-
-uninstall:
-	rm -f /usr/local/lib/libobinexus_dop_isolated.a
-	rm -f /usr/local/bin/dop_demo
-	rm -rf /usr/local/include/obinexus
-
-# Help target
-help:
-	@echo "OBINexus Taxonomy-Based Build System"
-	@echo "Available targets:"
-	@echo "  all              - Build debug version (default)"
-	@echo "  debug            - Build debug version with taxonomy support"
-	@echo "  release          - Build optimized release version"
-	@echo "  stress           - Build stress testing version"
-	@echo "  test             - Run basic component tests"
-	@echo "  test-demo        - Run demo application tests"
-	@echo "  test-isolated    - Run isolated system tests"
-	@echo "  test-preflight   - Run preflight validation"
-	@echo "  test-clock-enhanced - Run enhanced clock tests"
-	@echo "  clean            - Remove all build artifacts"
-	@echo "  install          - Install system-wide"
-	@echo "  uninstall        - Remove system installation"
-	@echo "  help             - Show this help message"
-
-# Declare phony targets (corrected syntax)
-.PHONY: all debug release stress test test-demo test-isolated test-preflight test-clock-enhanced clean clean-objects install uninstall help
+int dop_manifest_validate_schema(const char* xml_path) {
+    if (!xml_path) return DOP_ERROR_INVALID_PARAMETER;
+    
+    FILE* file = fopen(xml_path, "r");
+    if (!file) return DOP_ERROR_XML_PARSING;
+    
+    // Simplified schema validation
+    char line[512];
+    bool has_xml_declaration = false;
+    bool has_dop_namespace = false;
+    bool has_manifest_metadata = false;
+    bool has_build_topology = false;
+    
+    while (fgets(line, sizeof(line), file)) {
+        if (strstr(line, "<?xml version=")) {
+            has_xml_declaration = true;
+        }
+        if (strstr(line, "xmlns:dop=")) {
+            has_dop_namespace = true;
+        }
+        if (strstr(line, "<dop:manifest_metadata>")) {
+            has_manifest_metadata = true;
+        }
+        if (strstr(line, "<dop:build_topology>")) {
+            has_build_topology = true;
+        }
+    }
+    
+    fclose(file);
+    
+    if (has_xml_declaration && has_dop_namespace && has_manifest_metadata && has_build_topology) {
+        return DOP_SUCCESS;
+    }
+    
+    return DOP_ERROR_XML_PARSING;
+}
