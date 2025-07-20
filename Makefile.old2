@@ -1,5 +1,5 @@
 # OBINexus Taxonomy-Based Makefile
-# Final corrected version with proper syntax
+# Corrected syntax with proper tab indentation
 
 CC = gcc
 CFLAGS = -std=c11 -Wall -Wextra -Wpedantic -pthread
@@ -132,5 +132,11 @@ help:
 	@echo "  uninstall        - Remove system installation"
 	@echo "  help             - Show this help message"
 
-# Declare phony targets (corrected syntax)
-.PHONY: all debug release stress test test-demo test-isolated test-preflight test-clock-enhanced clean clean-objects install uninstall help
+# Declare phony targets
+.PHONY: all debug release 
+stress test test-demo 
+test-isolated 
+test-preflight 
+test-clock-enhanced clean 
+clean-objects install 
+uninstall help
