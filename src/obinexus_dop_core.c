@@ -6,6 +6,201 @@
 #include <sys/time.h>
 
 // Data-Oriented Implementation: Pure Functions Operating on Data
+// Time Utility Functions (add to obinexus_dop_core.c)
+dop_time_data_t dop_time_add_duration(dop_time_data_t base, uint64_t duration_ms) {
+    dop_time_data_t result = base;
+    result.timestamp_ms += duration_ms;
+    
+    // Convert back to time components
+    uint64_t total_ms = result.timestamp_ms;
+    uint64_t total_seconds = total_ms / 1000;
+    result.milliseconds = total_ms % 1000;
+    
+    uint64_t total_minutes = total_seconds / 60;
+    result.seconds = total_seconds % 60;
+    
+    uint64_t total_hours = total_minutes / 60;
+    result.minutes = total_minutes % 60;
+    
+    result.hours = total_hours % 24;
+    
+    return result;
+}
+
+bool dop_time_is_equal(dop_time_data_t time1, dop_time_data_t time2) {
+    return (time1.hours == time2.hours && 
+            time1.minutes == time2.minutes && 
+            time1.seconds == time2.seconds);
+}
+
+uint64_t dop_time_diff_ms(dop_time_data_t time1, dop_time_data_t time2) {
+    if (time1.timestamp_ms > time2.timestamp_ms) {
+        return time1.timestamp_ms - time2.timestamp_ms;
+    }
+    return time2.timestamp_ms - time1.timestamp_ms;
+}
+
+// Component Management Functions (add to obinexus_dop_core.c)
+int dop_func_destroy_component(dop_component_t* component) {
+    if (!component) return DOP_ERROR_INVALID_PARAMETER;
+    
+    pthread_mutex_destroy(&component->metadata.mutex);
+    free(component);
+    return DOP_SUCCESS;
+}
+
+char* dop_func_serialize_component(const dop_component_t* component) {
+    if (!component) return NULL;
+    
+    char* json = malloc(512);
+    if (!json) return NULL;
+    
+    snprintf(json, 512, 
+        "{"
+        "\"component_id\":\"%s\","
+        "\"component_name\":\"%s\","
+        "\"type\":%d,"
+        "\"state\":%d,"
+        "\"gate_state\":%d,"
+        "\"checksum\":%u"
+        "}",
+        component->metadata.component_id,
+        component->metadata.component_name,
+        component->metadata.type,
+        component->metadata.state,
+        component->metadata.gate_state,
+        component->checksum);
+    
+    return json;
+}
+
+// Gate Isolation Function (add to obinexus_dop_core.c)
+int dop_gate_isolate(dop_component_t* component) {
+    if (!component) return DOP_ERROR_INVALID_PARAMETER;
+    
+    pthread_mutex_lock(&component->metadata.mutex);
+    component->metadata.gate_state = DOP_GATE_ISOLATED;
+    pthread_mutex_unlock(&component->metadata.mutex);
+    
+    return DOP_SUCCESS;
+}
+
+// Component-Specific Logic Functions (add to obinexus_dop_core.c)
+int dop_alarm_set_time(dop_component_t* component, dop_time_data_t alarm_time) {
+    if (!component || component->metadata.type != DOP_COMPONENT_ALARM) {
+        return DOP_ERROR_INVALID_PARAMETER;
+    }
+    
+    if (!dop_gate_is_accessible(component)) {
+        return DOP_ERROR_GATE_CLOSED;
+    }
+    
+    pthread_mutex_lock(&component->metadata.mutex);
+    component->data.alarm.alarm_time = alarm_time;
+    component->checksum = dop_checksum_calculate(component);
+    pthread_mutex_unlock(&component->metadata.mutex);
+    
+    return DOP_SUCCESS;
+}
+
+int dop_alarm_arm(dop_component_t* component) {
+    if (!component || component->metadata.type != DOP_COMPONENT_ALARM) {
+        return DOP_ERROR_INVALID_PARAMETER;
+    }
+    
+    pthread_mutex_lock(&component->metadata.mutex);
+    component->data.alarm.is_armed = true;
+    component->checksum = dop_checksum_calculate(component);
+    pthread_mutex_unlock(&component->metadata.mutex);
+    
+    return DOP_SUCCESS;
+}
+
+int dop_alarm_disarm(dop_component_t* component) {
+    if (!component || component->metadata.type != DOP_COMPONENT_ALARM) {
+        return DOP_ERROR_INVALID_PARAMETER;
+    }
+    
+    pthread_mutex_lock(&component->metadata.mutex);
+    component->data.alarm.is_armed = false;
+    component->data.alarm.is_triggered = false;
+    component->checksum = dop_checksum_calculate(component);
+    pthread_mutex_unlock(&component->metadata.mutex);
+    
+    return DOP_SUCCESS;
+}
+
+bool dop_alarm_is_triggered(const dop_component_t* component) {
+    if (!component || component->metadata.type != DOP_COMPONENT_ALARM) {
+        return false;
+    }
+    
+    return component->data.alarm.is_triggered;
+}
+
+int dop_clock_set_timezone(dop_component_t* component, int32_t offset_hours) {
+    if (!component || component->metadata.type != DOP_COMPONENT_CLOCK) {
+        return DOP_ERROR_INVALID_PARAMETER;
+    }
+    
+    pthread_mutex_lock(&component->metadata.mutex);
+    component->data.clock.timezone_offset = offset_hours;
+    component->checksum = dop_checksum_calculate(component);
+    pthread_mutex_unlock(&component->metadata.mutex);
+    
+    return DOP_SUCCESS;
+}
+
+int dop_clock_set_format(dop_component_t* component, bool is_24_hour) {
+    if (!component || component->metadata.type != DOP_COMPONENT_CLOCK) {
+        return DOP_ERROR_INVALID_PARAMETER;
+    }
+    
+    pthread_mutex_lock(&component->metadata.mutex);
+    component->data.clock.is_24_hour_format = is_24_hour;
+    component->checksum = dop_checksum_calculate(component);
+    pthread_mutex_unlock(&component->metadata.mutex);
+    
+    return DOP_SUCCESS;
+}
+
+char* dop_clock_format_time(const dop_component_t* component) {
+    if (!component || component->metadata.type != DOP_COMPONENT_CLOCK) {
+        return NULL;
+    }
+    
+    char* formatted_time = malloc(32);
+    if (!formatted_time) return NULL;
+    
+    const dop_time_data_t* time = &component->data.clock.current_time;
+    
+    if (component->data.clock.is_24_hour_format) {
+        snprintf(formatted_time, 32, "%02u:%02u:%02u.%03u", 
+                time->hours, time->minutes, time->seconds, time->milliseconds);
+    } else {
+        uint32_t display_hour = time->hours;
+        const char* ampm = "AM";
+        
+        if (display_hour == 0) {
+            display_hour = 12;
+        } else if (display_hour > 12) {
+            display_hour -= 12;
+            ampm = "PM";
+        } else if (display_hour == 12) {
+            ampm = "PM";
+        }
+        
+        snprintf(formatted_time, 32, "%u:%02u:%02u.%03u %s", 
+                display_hour, time->minutes, time->seconds, time->milliseconds, ampm);
+    }
+    
+    return formatted_time;
+}
+
+bool dop_checksum_verify(const dop_component_t* component) {
+    if (!component) return false;
+    return component->checksum == dop_checksum_calculate(component);
+}
 
 // Time Utilities Implementation
 dop_time_data_t dop_time_get_current(void) {
