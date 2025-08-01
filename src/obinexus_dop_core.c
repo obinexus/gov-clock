@@ -6,7 +6,7 @@
 #include "nexus_link_semserver_x.h"
 #include <assert.h>
 #include <dlfcn.h>  // For dynamic loading
-
+#include <string.h>
 // Enhanced component metadata for hot-swapping
 typedef struct {
     dop_metadata_t base_metadata;
