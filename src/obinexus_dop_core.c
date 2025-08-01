@@ -1,274 +1,412 @@
-// obinexus_dop_core.c - Fixed enumeration handling
-// OBINexus Computing - Data-Oriented Programming Core Module
+// obinexus_dop_core_enhanced.c
+// OBINexus Computing - Enhanced DOP Core with Hot-Swap Support
+// Version: 2.0.0
 
 #include "obinexus_dop_core.h"
+#include "nexus_link_semserver_x.h"
 #include <assert.h>
+#include <dlfcn.h>  // For dynamic loading
 
-// Static assertion to ensure enum consistency
-_Static_assert(DOP_COMPONENT_COUNT == 4,
-               "DOP_COMPONENT_TYPE enum has changed - update switch statements!");
+// Enhanced component metadata for hot-swapping
+typedef struct {
+    dop_metadata_t base_metadata;
 
-// Functional Programming Interface Implementation
-dop_component_t* dop_func_create_component(dop_component_type_t type) {
-    dop_component_t* component = calloc(1, sizeof(dop_component_t));
-    if (!component) return NULL;
+    // Hot-swap capabilities
+    semantic_version_x_t semver_x;
+    bool is_hot_swappable;
+    void* component_handle;        // dlopen handle for dynamic loading
+    char library_path[256];        // Path to component library
 
-    // Initialize metadata
-    snprintf(component->metadata.component_id, sizeof(component->metadata.component_id),
-             "comp_%d_%llu", type, (unsigned long long)time(NULL));
+    // Fault tolerance tracking
+    uint32_t consecutive_failures;
+    uint64_t last_failure_time;
+    health_status_t health_status;
+    circuit_breaker_t* circuit_breaker;
 
-    switch (type) {
-        case DOP_COMPONENT_ALARM:
-            strcpy(component->metadata.component_name, "Alarm Component");
-            component->metadata.component_class = "temporal.alarm";
-            component->metadata.hot_swappable = true;
-            break;
-        case DOP_COMPONENT_CLOCK:
-            strcpy(component->metadata.component_name, "Clock Component");
-            component->metadata.component_class = "temporal.clock";
-            component->metadata.hot_swappable = true;
-            break;
-        case DOP_COMPONENT_STOPWATCH:
-            strcpy(component->metadata.component_name, "Stopwatch Component");
-            component->metadata.component_class = "temporal.stopwatch";
-            component->metadata.hot_swappable = true;
-            break;
-        case DOP_COMPONENT_TIMER:
-            strcpy(component->metadata.component_name, "Timer Component");
-            component->metadata.component_class = "temporal.timer";
-            component->metadata.hot_swappable = true;
-            break;
-        case DOP_COMPONENT_COUNT:
-            // Sentinel value - not a valid runtime component type
-            // This case prevents compiler warnings while maintaining safety
-            fprintf(stderr, "ERROR: DOP_COMPONENT_COUNT is not a valid component type\n");
-            free(component);
-            return NULL;
-        default:
-            // Unexpected component type - defensive programming
-            fprintf(stderr, "ERROR: Invalid component type %d\n", type);
-            free(component);
-            return NULL;
+    // Evolution tracking (Ship of Theseus)
+    component_evolution_t* evolution;
+    char original_contract_hash[65];
+} enhanced_dop_metadata_t;
+
+// Enhanced component structure
+typedef struct {
+    enhanced_dop_metadata_t metadata;
+    dop_component_data_t data;
+
+    // Function pointers for hot-swappable operations
+    struct {
+        int (*update)(void* component);
+        int (*validate)(void* component);
+        int (*quiesce)(void* component);
+        int (*resume)(void* component);
+    } operations;
+
+    // Fault tolerance configuration
+    fault_tolerant_component_t* fault_config;
+    nexus_resolution_context_t* resolution_ctx;
+
+    uint32_t checksum;
+} enhanced_dop_component_t;
+
+// Global Nexus-Link context for component resolution
+static nexus_resolution_context_t* g_nexus_ctx = NULL;
+
+// Initialize enhanced DOP system with Nexus-Link integration
+int dop_enhanced_init(const char* config_path) {
+    if (g_nexus_ctx != NULL) {
+        return DOP_ERROR_ALREADY_INITIALIZED;
     }
 
-    strcpy(component->metadata.version, "1.0.0");
-    component->metadata.type = type;
-    component->metadata.state = DOP_STATE_READY;
-    component->metadata.gate_state = DOP_GATE_CLOSED;
-    component->metadata.creation_timestamp = (uint64_t)time(NULL) * 1000;
-    component->metadata.last_update_timestamp = component->metadata.creation_timestamp;
-
-    pthread_mutex_init(&component->metadata.mutex, NULL);
-
-    // Initialize component-specific data
-    switch (type) {
-        case DOP_COMPONENT_CLOCK:
-            component->data.clock.current_time = dop_time_get_current();
-            component->data.clock.is_running = true;
-            component->data.clock.timezone_offset = 0;
-            component->data.clock.is_24_hour_format = true;
-            break;
-        case DOP_COMPONENT_ALARM:
-            component->data.alarm.current_time = dop_time_get_current();
-            component->data.alarm.is_armed = false;
-            component->data.alarm.is_triggered = false;
-            component->data.alarm.snooze_duration_ms = 300000; // 5 minutes
-            break;
-        case DOP_COMPONENT_STOPWATCH:
-            component->data.stopwatch.is_running = false;
-            component->data.stopwatch.is_paused = false;
-            component->data.stopwatch.lap_count = 0;
-            break;
-        case DOP_COMPONENT_TIMER:
-            component->data.timer.is_running = false;
-            component->data.timer.is_expired = false;
-            component->data.timer.auto_restart = false;
-            break;
-        case DOP_COMPONENT_COUNT:
-            // Already handled above - unreachable
-            assert(0 && "DOP_COMPONENT_COUNT should not reach component initialization");
-            break;
-        default:
-            // Already handled above - unreachable
-            assert(0 && "Invalid component type should not reach initialization");
-            break;
+    g_nexus_ctx = nexus_link_init(config_path, RESOLUTION_COMPATIBLE);
+    if (!g_nexus_ctx) {
+        return DOP_ERROR_INITIALIZATION_FAILED;
     }
 
-    component->checksum = dop_checksum_calculate(component);
+    // Register built-in components
+    component_manifest_t builtin_manifests[] = {
+        {
+            .component_id = "obinexus.dop.alarm",
+            .component_name = "Alarm Component",
+            .version = {
+                .major = 1, .minor = 0, .patch = 0, .hotfix = 0,
+                .is_hot_swappable = true,
+                .requires_quiesce = false,
+                .swap_duration_ms = 50
+            },
+            .taxonomy_class = "temporal.alarm",
+            .isolation_tier = 1  // Closed system
+        },
+        {
+            .component_id = "obinexus.dop.clock",
+            .component_name = "Clock Component",
+            .version = {
+                .major = 1, .minor = 0, .patch = 0, .hotfix = 0,
+                .is_hot_swappable = true,
+                .requires_quiesce = true,
+                .swap_duration_ms = 100
+            },
+            .taxonomy_class = "temporal.clock",
+            .isolation_tier = 0  // Isolated system
+        }
+        // Additional components...
+    };
+
+    for (int i = 0; i < 2; i++) {
+        nexus_register_component(g_nexus_ctx, &builtin_manifests[i], SOURCE_OBINEXUS_DIRECT);
+    }
+
+    return DOP_SUCCESS;
+}
+
+// Enhanced component creation with hot-swap support
+enhanced_dop_component_t* dop_create_enhanced_component(
+    const char* component_id,
+    semantic_version_x_t* requested_version
+) {
+    if (!g_nexus_ctx) {
+        return NULL;
+    }
+
+    // Resolve component through Nexus-Link
+    component_manifest_t* manifest = nexus_resolve_component(
+        g_nexus_ctx,
+        component_id,
+        requested_version,
+        RESOLUTION_COMPATIBLE
+    );
+
+    if (!manifest) {
+        // Try fallback resolution
+        manifest = nexus_resolve_component(
+            g_nexus_ctx,
+            component_id,
+            requested_version,
+            RESOLUTION_FALLBACK_CHAIN
+        );
+
+        if (!manifest) {
+            return NULL;
+        }
+    }
+
+    enhanced_dop_component_t* component = calloc(1, sizeof(enhanced_dop_component_t));
+    if (!component) {
+        return NULL;
+    }
+
+    // Initialize enhanced metadata
+    snprintf(component->metadata.base_metadata.component_id,
+             sizeof(component->metadata.base_metadata.component_id),
+             "%s_%llu", component_id, (unsigned long long)time(NULL));
+
+    strcpy(component->metadata.base_metadata.component_name, manifest->component_name);
+    component->metadata.semver_x = manifest->version;
+    component->metadata.is_hot_swappable = manifest->version.is_hot_swappable;
+
+    // Initialize fault tolerance
+    component->metadata.health_status = HEALTH_HEALTHY;
+    component->metadata.circuit_breaker = calloc(1, sizeof(circuit_breaker_t));
+    strcpy(component->metadata.circuit_breaker->component_id, component_id);
+    component->metadata.circuit_breaker->state = CIRCUIT_CLOSED;
+    pthread_mutex_init(&component->metadata.circuit_breaker->breaker_mutex, NULL);
+
+    // Initialize evolution tracking
+    component->metadata.evolution = nexus_track_evolution(g_nexus_ctx, component_id);
+
+    // Load component library if hot-swappable
+    if (component->metadata.is_hot_swappable) {
+        snprintf(component->metadata.library_path,
+                 sizeof(component->metadata.library_path),
+                 "/opt/obinexus/components/%s/v%d.%d.%d/lib%s.so",
+                 component_id,
+                 manifest->version.major,
+                 manifest->version.minor,
+                 manifest->version.patch,
+                 component_id);
+
+        component->metadata.component_handle = dlopen(
+            component->metadata.library_path,
+            RTLD_LAZY | RTLD_LOCAL
+        );
+
+        if (component->metadata.component_handle) {
+            // Load function pointers
+            component->operations.update = dlsym(component->metadata.component_handle, "component_update");
+            component->operations.validate = dlsym(component->metadata.component_handle, "component_validate");
+            component->operations.quiesce = dlsym(component->metadata.component_handle, "component_quiesce");
+            component->operations.resume = dlsym(component->metadata.component_handle, "component_resume");
+        }
+    }
+
+    // Set up fault-tolerant configuration
+    if (manifest->fault_tolerance.fallback_component[0] != '\0') {
+        component->fault_config = nexus_create_fault_tolerant(
+            g_nexus_ctx,
+            component_id,
+            manifest->fault_tolerance.fallback_component
+        );
+    }
+
+    component->resolution_ctx = g_nexus_ctx;
+    component->metadata.base_metadata.state = DOP_STATE_READY;
+    component->metadata.base_metadata.gate_state = DOP_GATE_CLOSED;
+    component->metadata.base_metadata.creation_timestamp = (uint64_t)time(NULL) * 1000;
+
+    pthread_mutex_init(&component->metadata.base_metadata.mutex, NULL);
+
     return component;
 }
 
-int dop_func_update_component(dop_component_t* component) {
-    if (!component || !dop_gate_is_accessible(component)) {
+// Hot-swap implementation
+int dop_hot_swap_component(
+    enhanced_dop_component_t* component,
+    semantic_version_x_t* new_version,
+    bool force_swap
+) {
+    if (!component || !new_version || !component->metadata.is_hot_swappable) {
         return DOP_ERROR_INVALID_PARAMETER;
     }
 
-    pthread_mutex_lock(&component->metadata.mutex);
+    pthread_mutex_lock(&component->metadata.base_metadata.mutex);
 
-    dop_time_data_t current_time = dop_time_get_current();
-
-    switch (component->metadata.type) {
-        case DOP_COMPONENT_CLOCK:
-            component->data.clock.current_time = current_time;
-            break;
-
-        case DOP_COMPONENT_ALARM:
-            component->data.alarm.current_time = current_time;
-            if (component->data.alarm.is_armed &&
-                dop_time_is_equal(current_time, component->data.alarm.alarm_time)) {
-                component->data.alarm.is_triggered = true;
-            }
-            break;
-
-        case DOP_COMPONENT_STOPWATCH:
-            if (component->data.stopwatch.is_running && !component->data.stopwatch.is_paused) {
-                component->data.stopwatch.current_time = current_time;
-                component->data.stopwatch.elapsed_time = dop_time_add_duration(
-                    component->data.stopwatch.elapsed_time,
-                    dop_time_diff_ms(component->data.stopwatch.current_time,
-                                   component->data.stopwatch.start_time)
-                );
-            }
-            break;
-
-        case DOP_COMPONENT_TIMER:
-            if (component->data.timer.is_running) {
-                uint64_t elapsed = dop_time_diff_ms(current_time, component->data.timer.start_time);
-                if (elapsed >= component->data.timer.duration.timestamp_ms) {
-                    component->data.timer.is_expired = true;
-                    component->data.timer.is_running = false;
-
-                    // Handle auto-restart if enabled
-                    if (component->data.timer.auto_restart) {
-                        component->data.timer.start_time = current_time;
-                        component->data.timer.is_running = true;
-                        component->data.timer.is_expired = false;
-                    }
-                }
-            }
-            break;
-
-        case DOP_COMPONENT_COUNT:
-            // Invalid component type for runtime update
-            pthread_mutex_unlock(&component->metadata.mutex);
-            return DOP_ERROR_INVALID_COMPONENT_TYPE;
-
-        default:
-            // Unexpected component type
-            pthread_mutex_unlock(&component->metadata.mutex);
-            return DOP_ERROR_UNKNOWN_TYPE;
-    }
-
-    component->metadata.last_update_timestamp = current_time.timestamp_ms;
-    component->checksum = dop_checksum_calculate(component);
-
-    pthread_mutex_unlock(&component->metadata.mutex);
-    return DOP_SUCCESS;
-}
-
-// Utility function to validate component type at runtime
-int dop_validate_component_type(dop_component_type_t type) {
-    if (type >= 0 && type < DOP_COMPONENT_COUNT) {
-        return DOP_SUCCESS;
-    }
-    return DOP_ERROR_INVALID_COMPONENT_TYPE;
-}
-
-// Enhanced semantic version validation for hot-swappable components
-typedef struct {
-    uint32_t major;
-    uint32_t minor;
-    uint32_t patch;
-    char prerelease[64];
-    char build_metadata[128];
-} semantic_version_t;
-
-int dop_parse_semantic_version(const char* version_str, semantic_version_t* version) {
-    if (!version_str || !version) {
-        return DOP_ERROR_INVALID_PARAMETER;
-    }
-
-    // Parse semantic version according to semver 2.0.0 spec
-    int matches = sscanf(version_str, "%u.%u.%u",
-                        &version->major,
-                        &version->minor,
-                        &version->patch);
-
-    if (matches != 3) {
-        return DOP_ERROR_INVALID_VERSION_FORMAT;
-    }
-
-    // Parse prerelease and build metadata if present
-    const char* prerelease_start = strchr(version_str, '-');
-    const char* build_start = strchr(version_str, '+');
-
-    if (prerelease_start) {
-        size_t prerelease_len = build_start ?
-            (size_t)(build_start - prerelease_start - 1) :
-            strlen(prerelease_start + 1);
-
-        if (prerelease_len >= sizeof(version->prerelease)) {
-            return DOP_ERROR_VERSION_STRING_TOO_LONG;
+    // Step 1: Quiesce component if required
+    if (component->metadata.semver_x.requires_quiesce && component->operations.quiesce) {
+        int quiesce_result = component->operations.quiesce(component);
+        if (quiesce_result != DOP_SUCCESS && !force_swap) {
+            pthread_mutex_unlock(&component->metadata.base_metadata.mutex);
+            return DOP_ERROR_QUIESCE_FAILED;
         }
-
-        strncpy(version->prerelease, prerelease_start + 1, prerelease_len);
-        version->prerelease[prerelease_len] = '\0';
-    } else {
-        version->prerelease[0] = '\0';
     }
 
-    if (build_start) {
-        strncpy(version->build_metadata, build_start + 1,
-                sizeof(version->build_metadata) - 1);
-        version->build_metadata[sizeof(version->build_metadata) - 1] = '\0';
-    } else {
-        version->build_metadata[0] = '\0';
+    // Step 2: Validate new version compatibility
+    if (!nexus_version_compatible(&component->metadata.semver_x, new_version, RESOLUTION_COMPATIBLE)) {
+        if (!force_swap) {
+            pthread_mutex_unlock(&component->metadata.base_metadata.mutex);
+            return DOP_ERROR_VERSION_INCOMPATIBLE;
+        }
     }
 
-    return DOP_SUCCESS;
+    // Step 3: Load new component library
+    char new_library_path[256];
+    snprintf(new_library_path, sizeof(new_library_path),
+             "/opt/obinexus/components/%s/v%d.%d.%d/lib%s.so",
+             component->metadata.base_metadata.component_id,
+             new_version->major,
+             new_version->minor,
+             new_version->patch,
+             component->metadata.base_metadata.component_id);
+
+    void* new_handle = dlopen(new_library_path, RTLD_LAZY | RTLD_LOCAL);
+    if (!new_handle) {
+        pthread_mutex_unlock(&component->metadata.base_metadata.mutex);
+        return DOP_ERROR_LIBRARY_LOAD_FAILED;
+    }
+
+    // Step 4: Backup current state
+    semantic_version_x_t old_version = component->metadata.semver_x;
+    void* old_handle = component->metadata.component_handle;
+
+    // Step 5: Perform swap
+    component->metadata.component_handle = new_handle;
+    component->metadata.semver_x = *new_version;
+    strcpy(component->metadata.library_path, new_library_path);
+
+    // Update function pointers
+    component->operations.update = dlsym(new_handle, "component_update");
+    component->operations.validate = dlsym(new_handle, "component_validate");
+    component->operations.quiesce = dlsym(new_handle, "component_quiesce");
+    component->operations.resume = dlsym(new_handle, "component_resume");
+
+    // Step 6: Validate new component
+    if (component->operations.validate) {
+        int validate_result = component->operations.validate(component);
+        if (validate_result != DOP_SUCCESS) {
+            // Rollback
+            component->metadata.component_handle = old_handle;
+            component->metadata.semver_x = old_version;
+            dlclose(new_handle);
+
+            pthread_mutex_unlock(&component->metadata.base_metadata.mutex);
+            return DOP_ERROR_VALIDATION_FAILED;
+        }
+    }
+
+    // Step 7: Resume operations
+    if (component->operations.resume) {
+        component->operations.resume(component);
+    }
+
+    // Step 8: Clean up old library
+    if (old_handle) {
+        dlclose(old_handle);
+    }
+
+    // Step 9: Update evolution tracking
+    if (component->metadata.evolution) {
+        component->metadata.evolution->evolution_history[component->metadata.evolution->evolution_count].from_version = old_version;
+        component->metadata.evolution->evolution_history[component->metadata.evolution->evolution_count].to_version = *new_version;
+        component->metadata.evolution->evolution_history[component->metadata.evolution->evolution_count].swap_timestamp = time(NULL);
+        strcpy(component->metadata.evolution->evolution_history[component->metadata.evolution->evolution_count].reason, "Hot swap upgrade");
+        component->metadata.evolution->evolution_history[component->metadata.evolution->evolution_count].was_automatic = !force_swap;
+        component->metadata.evolution->evolution_count++;
+        component->metadata.evolution->total_swaps++;
+        component->metadata.evolution->current_version = *new_version;
+    }
+
+    // Step 10: Notify Nexus-Link of successful swap
+    swap_result_t swap_result = nexus_hot_swap_component(
+        g_nexus_ctx,
+        component->metadata.base_metadata.component_id,
+        &old_version,
+        new_version,
+        force_swap
+    );
+
+    pthread_mutex_unlock(&component->metadata.base_metadata.mutex);
+
+    return (swap_result == SWAP_SUCCESS) ? DOP_SUCCESS : DOP_ERROR_SWAP_NOTIFICATION_FAILED;
 }
 
-// Fault tolerance enhancement for component adapters
-typedef struct {
-    char adapter_id[64];
-    semantic_version_t version;
-    bool is_hot_swappable;
-    uint32_t fault_tolerance_level;  // 0-100 percentage
-    uint64_t last_health_check;
-    uint32_t consecutive_failures;
-    uint32_t max_retry_attempts;
-} adapter_metadata_t;
-
-int dop_adapter_validate_health(adapter_metadata_t* adapter) {
-    if (!adapter) {
+// Circuit breaker implementation for fault tolerance
+int dop_check_circuit_breaker(enhanced_dop_component_t* component) {
+    if (!component || !component->metadata.circuit_breaker) {
         return DOP_ERROR_INVALID_PARAMETER;
     }
 
-    // Check if adapter requires health validation
-    uint64_t current_time_ms = (uint64_t)time(NULL) * 1000;
-    uint64_t time_since_last_check = current_time_ms - adapter->last_health_check;
+    circuit_breaker_t* breaker = component->metadata.circuit_breaker;
+    pthread_mutex_lock(&breaker->breaker_mutex);
 
-    // Health check every 30 seconds for critical adapters
-    if (time_since_last_check > 30000) {
-        // Simulate health check (in production, this would query actual adapter)
-        bool health_check_passed = (rand() % 100) > 5; // 95% success rate
+    uint64_t current_time = time(NULL);
 
-        if (!health_check_passed) {
-            adapter->consecutive_failures++;
+    switch (breaker->state) {
+        case CIRCUIT_CLOSED:
+            // Normal operation - allow requests
+            pthread_mutex_unlock(&breaker->breaker_mutex);
+            return DOP_SUCCESS;
 
-            if (adapter->consecutive_failures >= adapter->max_retry_attempts) {
-                return DOP_ERROR_ADAPTER_UNHEALTHY;
+        case CIRCUIT_OPEN:
+            // Check if we should transition to half-open
+            if (current_time >= breaker->next_retry_time) {
+                breaker->state = CIRCUIT_HALF_OPEN;
+                breaker->success_count = 0;
+                pthread_mutex_unlock(&breaker->breaker_mutex);
+                return DOP_SUCCESS;  // Allow one test request
             }
+            pthread_mutex_unlock(&breaker->breaker_mutex);
+            return DOP_ERROR_CIRCUIT_OPEN;
 
-            // Apply exponential backoff
-            usleep(1000 * (1 << adapter->consecutive_failures));
-            return DOP_WARNING_ADAPTER_DEGRADED;
-        }
-
-        // Reset failure counter on success
-        adapter->consecutive_failures = 0;
-        adapter->last_health_check = current_time_ms;
+        case CIRCUIT_HALF_OPEN:
+            // In testing phase - allow limited requests
+            pthread_mutex_unlock(&breaker->breaker_mutex);
+            return DOP_SUCCESS;
     }
 
-    return DOP_SUCCESS;
+    pthread_mutex_unlock(&breaker->breaker_mutex);
+    return DOP_ERROR_UNKNOWN_STATE;
+}
+
+// Record component failure for circuit breaker
+void dop_record_failure(enhanced_dop_component_t* component) {
+    if (!component || !component->metadata.circuit_breaker) {
+        return;
+    }
+
+    circuit_breaker_t* breaker = component->metadata.circuit_breaker;
+    pthread_mutex_lock(&breaker->breaker_mutex);
+
+    breaker->failure_count++;
+    breaker->last_failure_time = time(NULL);
+    component->metadata.consecutive_failures++;
+    component->metadata.last_failure_time = breaker->last_failure_time;
+
+    // Check if we should open the circuit
+    if (breaker->state == CIRCUIT_CLOSED && breaker->failure_count >= 5) {
+        breaker->state = CIRCUIT_OPEN;
+        breaker->next_retry_time = breaker->last_failure_time + 30;  // 30 second timeout
+
+        // Attempt failover if available
+        if (component->fault_config && component->fault_config->fallback) {
+            // TODO: Implement automatic failover
+        }
+    } else if (breaker->state == CIRCUIT_HALF_OPEN) {
+        // Failed during testing - reopen circuit
+        breaker->state = CIRCUIT_OPEN;
+        breaker->next_retry_time = breaker->last_failure_time + 60;  // Longer timeout
+    }
+
+    pthread_mutex_unlock(&breaker->breaker_mutex);
+}
+
+// Record component success for circuit breaker
+void dop_record_success(enhanced_dop_component_t* component) {
+    if (!component || !component->metadata.circuit_breaker) {
+        return;
+    }
+
+    circuit_breaker_t* breaker = component->metadata.circuit_breaker;
+    pthread_mutex_lock(&breaker->breaker_mutex);
+
+    breaker->success_count++;
+    component->metadata.consecutive_failures = 0;
+
+    if (breaker->state == CIRCUIT_HALF_OPEN && breaker->success_count >= 3) {
+        // Sufficient successes - close the circuit
+        breaker->state = CIRCUIT_CLOSED;
+        breaker->failure_count = 0;
+        breaker->success_count = 0;
+    }
+
+    pthread_mutex_unlock(&breaker->breaker_mutex);
+}
+
+// Validate component evolution maintains contract (Ship of Theseus)
+bool dop_validate_evolution_contract(enhanced_dop_component_t* component) {
+    if (!component || !component->metadata.evolution) {
+        return false;
+    }
+
+    return nexus_validate_evolved_contract(
+        component->metadata.evolution,
+        component->metadata.original_contract_hash
+    );
 }
