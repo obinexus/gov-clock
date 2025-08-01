@@ -9,7 +9,7 @@
 #include <stdbool.h>
 #include <time.h>
 #include <pthread.h>
-
+#include <stdio.h>
 // Data-Oriented Programming Core Types
 typedef enum {
     DOP_COMPONENT_ALARM = 0,
